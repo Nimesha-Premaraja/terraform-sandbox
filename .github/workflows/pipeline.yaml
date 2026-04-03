@@ -9,8 +9,12 @@ jobs:
   terraform-plan:
     name: "Terraform Plan"
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./tf-resouces/random_pet
     permissions:
       pull-requests: write # Required to post comments on the PR
+      contents: read
     
     steps:
       - name: Checkout Code
