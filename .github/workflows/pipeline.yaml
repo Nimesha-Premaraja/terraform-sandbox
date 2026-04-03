@@ -1,21 +1,23 @@
-name: "Terraform Test"
+name: "Terraform Lifecycle"
 
 on:
   pull_request:
-    branches:
-      - main
+    branches: [ main ]
+  push:
+    branches: [ main ]
 
 jobs:
-  terraform-plan:
-    name: "Terraform Plan"
+  terraform:
+    name: "Terraform"
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    
     defaults:
       run:
         working-directory: ./tf-resouces/random_pet
-    permissions:
-      pull-requests: write # Required to post comments on the PR
-      contents: read
-    
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -23,19 +25,19 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_wrapper: true # This allows us to capture stdout/stderr
+          terraform_wrapper: true
 
       - name: Terraform Init
-        id: init
         run: terraform init
 
+      # --- 1. PLAN (PR ONLY) ---
       - name: Terraform Plan
+        if: github.event_name == 'pull_request'
         id: plan
-        # We use -no-color to make the text readable in GitHub comments
         run: terraform plan -no-color
         continue-on-error: true
 
-      - name: Update Pull Request
+      - name: Post Plan to PR
         uses: actions/github-script@v7
         if: github.event_name == 'pull_request'
         env:
@@ -43,20 +45,44 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const output = `#### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
-            #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
-            
-            <details><summary>Show Plan Output</summary>
-            
-            \`\`\`${process.env.PLAN}\`\`\`
-            
-            </details>
-            
-            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
-            
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: output
+              body: `#### Terraform Plan 📖 \`${{ steps.plan.outcome }}\` \n <details><summary>Show Plan</summary>\n\n\`\`\`${process.env.PLAN}\`\`\`\n\n</details>`
             })
+
+      # --- 2. APPLY (MERGE TO MAIN ONLY) ---
+      - name: Terraform Apply
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: apply
+        run: terraform apply -auto-approve -no-color
+
+      - name: Post Apply Results to PR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/github-script@v7
+        env:
+          APPLY_OUT: "${{ steps.apply.outputs.stdout }}"
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // 1. Find the PR associated with this merge commit
+            const result = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+            });
+
+            const prNumber = result.data.length > 0 ? result.data[0].number : null;
+
+            // 2. If a PR exists, post the Apply output
+            if (prNumber) {
+              github.rest.issues.createComment({
+                issue_number: prNumber,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `### ✅ Terraform Apply Successful!\nThe infrastructure has been updated.\n\n<details><summary>Show Apply Output</summary>\n\n\`\`\`terraform\n${process.env.APPLY_OUT}\n\`\`\`\n\n</details>`
+              });
+            } else {
+              console.log("No associated PR found for this push.");
+            }
