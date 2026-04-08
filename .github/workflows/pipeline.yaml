@@ -13,7 +13,7 @@ jobs:
   # -------------------------------------------------
   changes:
     runs-on: ubuntu-latest
-    outputs:a
+    outputs:
       random_pet: ${{ steps.filter.outputs.random_pet }}
       random_password: ${{ steps.filter.outputs.random_password }}
 
