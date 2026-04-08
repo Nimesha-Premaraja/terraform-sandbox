@@ -62,9 +62,11 @@ jobs:
 
       - name: Skip module if no changes
         if: ${{ (matrix.module == 'random_pet' && needs.changes.outputs.random_pet != 'true') || 
-                 (matrix.module == 'random_password' && needs.changes.outputs.random_password != 'true') }}
-        run: echo "Skipping module ${matrix.module} as no changes detected." && exit 0
-
+           (matrix.module == 'random_password' && needs.changes.outputs.random_password != 'true') }}
+        run: |
+            echo "Skipping module $MATRIX_MODULE as no changes detected."
+            exit 0
+     
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
