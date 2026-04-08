@@ -3,8 +3,3 @@ variable "ami_id" {
   default     = "test-id7"
   description = "The ID used to trigger a name change"
 }
-resource "random_pet" "server" {
-  keepers = {
-    ami_id = var.ami_id
-  }
-}
