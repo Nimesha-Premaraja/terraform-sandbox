@@ -1,5 +1,5 @@
 variable "ami_id" {
   type        = string
-  default     = "test-id9"
+  default     = "test-id10"
   description = "The ID used to trigger a name change"
 }
