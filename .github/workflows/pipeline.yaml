@@ -56,12 +56,12 @@ jobs:
   # -------------------------------------------------
   terraform:
     needs: module-changes
-    if: needs.changes.outputs.matrix != '[]'
+    if: needs.module-changes.outputs.matrix != '[]'
     runs-on: ubuntu-latest
 
     strategy:
       matrix:
-        module: ${{ fromJson(needs.changes.outputs.matrix) }}
+        module: ${{ fromJson(needs.module-changes.outputs.matrix) }}
 
     permissions:
       pull-requests: write
