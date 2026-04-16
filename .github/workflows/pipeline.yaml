@@ -2,13 +2,13 @@ name: "Terraform Lifecycle"
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'tf-resouces/environments/terraform/**'
+      - "tf-resouces/environments/terraform/**"
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'tf-resouces/environments/terraform/**'
+      - "tf-resouces/environments/terraform/**"
 
 jobs:
   module-changes:
@@ -20,7 +20,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 
+          fetch-depth: 0
 
       - name: Detect Changed Modules
         id: set-matrix
@@ -29,9 +29,9 @@ jobs:
           # 2. Extract path up to the 5th directory (the module name)
           # 3. 'sort -u' removes the duplicates
           # 4. Convert to a JSON array for the matrix
-          
+
           BASE_PATH="tf-resouces/environments/terraform"
-          
+
           # Detect files changed in the PR or the last Push
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             DIFF=$(git diff --name-only origin/${{ github.base_ref }} ${{ github.sha }})
@@ -121,4 +121,28 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         id: apply
         run: terraform apply -auto-approve -no-color
-        working-directory: ${{ matrix.module }}
+
+      - name: Post Apply Results to PR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/github-script@v7
+        env:
+          APPLY_OUT: "${{ steps.apply.outputs.stdout }}"
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const result = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+            });
+            const prNumber = result.data.length > 0 ? result.data[0].number : null;
+            if (prNumber) {
+              github.rest.issues.createComment({
+                issue_number: prNumber,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `### ✅ Terraform Apply Successful!\nThe infrastructure has been updated.\n\n<details><summary>Show Apply Output</summary>\n\n\`\`\`terraform\n${process.env.APPLY_OUT}\n\`\`\`\n\n</details>`
+              });
+            } else {
+              console.log("No associated PR found for this push.");
+            }
