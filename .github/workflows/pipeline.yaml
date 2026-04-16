@@ -4,17 +4,13 @@ on:
   pull_request:
     branches: [ main ]
     paths:
-      - tf-resouces/environments/terraform
+      - 'tf-resouces/environments/terraform/**'
   push:
     branches: [ main ]
     paths:
-      - tf-resouces/environments/terraform
+      - 'tf-resouces/environments/terraform/**'
 
 jobs:
-
-  # -------------------------------------------------
-  # Detect changed Terraform modules
-  # -------------------------------------------------
   module-changes:
     runs-on: ubuntu-latest
     outputs:
@@ -23,65 +19,41 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Detect changed modules
-        id: filter
-        uses: dorny/paths-filter@v3
         with:
-          filters: |
-            random_pet_dev:
-              - 'tf-resouces/environments/terraform/dev/random_pet_dev'
-            random_password_dev:
-              - 'tf-resouces/environments/terraform/dev/random_password_dev'
-            random_pet:
-              - 'tf-resouces/environments/terraform/prod/random_pet'
-            random_password:
-              - 'tf-resouces/environments/terraform/prod/random_password'
+          fetch-depth: 0 
 
-
-      - name: Create matrix from changes
+      - name: Detect Changed Modules
         id: set-matrix
         run: |
-          modules=()
-
-          if [[ "${{ steps.filter.outputs.random_pet }}" == "true" ]]; then
-            modules+=("\"random_pet\"")
-          fi
-
-          if [[ "${{ steps.filter.outputs.random_password }}" == "true" ]]; then
-            modules+=("\"random_password\"")
-          fi 
-          if [[ "${{ steps.filter.outputs.random_pet_dev }}" == "true" ]]; then
-            modules+=("\"random_pet_dev\"")
-          fi
-          if [[ "${{ steps.filter.outputs.random_password_dev }}" == "true" ]]; then
-            modules+=("\"random_password_dev\"")
-          fi 
-
-          if [ ${#modules[@]} -eq 0 ]; then
-          matrix="[]"
+          # 1. Get changed files
+          # 2. Extract path up to the 5th directory (the module name)
+          # 3. 'sort -u' removes the duplicates
+          # 4. Convert to a JSON array for the matrix
+          
+          BASE_PATH="tf-resouces/environments/terraform"
+          
+          # Detect files changed in the PR or the last Push
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            DIFF=$(git diff --name-only origin/${{ github.base_ref }} ${{ github.sha }})
           else
-          matrix=$(printf "[%s]" "$(IFS=,; echo "${modules[*]}")")   
+            DIFF=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
           fi
 
-          echo "matrix=$matrix" >> $GITHUB_OUTPUT
+          # Filter for our TF path, cut to module level, and remove duplicates
+          MODULES=$(echo "$DIFF" | grep "^$BASE_PATH/" | cut -d/ -f1-5 | sort -u | jq -R -s -c 'split("\n") | map(select(length > 0))')
 
-#Checks which Terraform modules changed
-#Adds them to a list
-#Converts the list into a JSON matrix
-#Passes it to GitHub Actions to run jobs only for changed modules
+          if [ "$MODULES" == "[]" ] || [ -z "$MODULES" ]; then
+            echo "matrix=[]" >> $GITHUB_OUTPUT
+          else
+            echo "matrix=$MODULES" >> $GITHUB_OUTPUT
+          fi
 
-
-
-  # -------------------------------------------------
-  # Terraform Job (Matrix)
-  # -------------------------------------------------
   terraform:
     needs: module-changes
-    if: needs.module-changes.outputs.matrix != '[]'
+    if: needs.module-changes.outputs.matrix != '[]' && needs.module-changes.outputs.matrix != ''
     runs-on: ubuntu-latest
-
     strategy:
+      fail-fast: false
       matrix:
         module: ${{ fromJson(needs.module-changes.outputs.matrix) }}
 
@@ -89,12 +61,7 @@ jobs:
       pull-requests: write
       contents: read
 
-    defaults:
-      run:
-        working-directory: ./tf-resouces/${{ matrix.module }}
-
     steps:
-
       - name: Checkout Code
         uses: actions/checkout@v4
 
@@ -105,46 +72,43 @@ jobs:
 
       - name: Terraform Init
         run: terraform init
+        working-directory: ${{ matrix.module }}
 
       - name: Terraform Format
-        working-directory: tf-resouces/${{ matrix.module }}
         run: terraform fmt -check -recursive
+        working-directory: ${{ matrix.module }}
 
       - name: Terraform Validate
-        working-directory: tf-resouces/${{ matrix.module }}
         run: terraform validate
+        working-directory: ${{ matrix.module }}
 
       - name: Security Scan
         uses: aquasecurity/tfsec-action@v1.0.3
         with:
-         working_directory: tf-resouces/${{ matrix.module }}
+          working_directory: ${{ matrix.module }}
 
       - name: Terraform Plan
         if: github.event_name == 'pull_request'
         id: plan
         run: terraform plan -no-color
+        working-directory: ${{ matrix.module }}
 
       - name: Post Plan to PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         env:
           PLAN_DATA: "${{ steps.plan.outputs.stdout }}"
+          MODULE_NAME: "${{ matrix.module }}"
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const plan = process.env.PLAN_DATA;
-
-            const output = `#### Terraform Plan 📖 \`${{ steps.plan.outcome }}\`
-
+            const output = `#### Module: \`${process.env.MODULE_NAME}\`
+            #### Terraform Plan 📖 \`${{ steps.plan.outcome }}\`
             <details><summary>Show Plan</summary>
-
             \`\`\`terraform
-            ${plan}
+            ${process.env.PLAN_DATA}
             \`\`\`
-
-            </details>
-
-            *Actor: @${context.actor}*`;
+            </details>`;
 
             github.rest.issues.createComment({
               issue_number: context.issue.number,
@@ -157,36 +121,4 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         id: apply
         run: terraform apply -auto-approve -no-color
-
-      - name: Post Apply Results to PR
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/github-script@v7
-        env:
-          APPLY_OUT: "${{ steps.apply.outputs.stdout }}"
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const result = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              commit_sha: context.sha,
-            });
-
-            const prNumber = result.data.length > 0 ? result.data[0].number : null;
-
-            if (prNumber) {
-              github.rest.issues.createComment({
-                issue_number: prNumber,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: `### ✅ Terraform Apply Successful
-
-                <details><summary>Show Apply Output</summary>
-
-                \`\`\`terraform
-                ${process.env.APPLY_OUT}
-                \`\`\`
-
-                </details>`
-              });
-            }
+        working-directory: ${{ matrix.module }}
