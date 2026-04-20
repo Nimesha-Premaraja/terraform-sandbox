@@ -11,37 +11,57 @@ on:
       - "tf-resouces/environments/terraform/**"
 
 jobs:
-  module-changes:
+  format-and-detect:
+    name: "Format & Detect Changes"
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
+      fmt_changed: ${{ steps.auto_commit.outputs.changes_detected }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # Using a PAT is CRITICAL to trigger the next workflow run after auto-fix
+          token: ${{ secrets.MY_GIT_PAT }}
+
+      - name: Terraform Format (Global)
+        run: terraform fmt -recursive tf-resouces/environments/terraform/
+
+      - name: Auto-Commit Fixes
+        id: auto_commit
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "style: automated terraform fmt"
+          file_pattern: "tf-resouces/environments/terraform/**/*.tf"
+
+      - name: Stop if Formatted
+        if: steps.auto_commit.outputs.changes_detected == 'true'
+        run: |
+          echo "Formatting issues were found and fixed automatically."
+          echo "A new workflow run has been triggered by the push. Terminating this run."
+          exit 1
 
       - name: Detect Changed Modules
         id: set-matrix
         run: |
-          # 1. Get changed files
-          # 2. Extract path up to the 5th directory (the module name)
-          # 3. 'sort -u' removes the duplicates
-          # 4. Convert to a JSON array for the matrix
-
           BASE_PATH="tf-resouces/environments/terraform"
-
-          # Detect files changed in the PR or the last Push
+          
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            # Ensure we have the base branch to compare against
+            git fetch origin ${{ github.base_ref }}
             DIFF=$(git diff --name-only origin/${{ github.base_ref }} ${{ github.sha }})
           else
             DIFF=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
           fi
 
-          # Filter for our TF path, cut to module level, and remove duplicates
+          # Extract paths up to the 5th directory level (the module root)
           MODULES=$(echo "$DIFF" | grep "^$BASE_PATH/" | cut -d/ -f1-5 | sort -u | jq -R -s -c 'split("\n") | map(select(length > 0))')
-
+          
           if [ "$MODULES" == "[]" ] || [ -z "$MODULES" ]; then
             echo "matrix=[]" >> $GITHUB_OUTPUT
           else
@@ -49,19 +69,22 @@ jobs:
           fi
 
   terraform:
-    needs: module-changes
-    if: needs.module-changes.outputs.matrix != '[]' && needs.module-changes.outputs.matrix != ''
+    name: "Terraform Operation"
+    needs: format-and-detect
+    # Proceed only if there are changes and we didn't just restart due to a format fix
+    if: needs.format-and-detect.outputs.matrix != '[]' && needs.format-and-detect.outputs.fmt_changed != 'true'
     runs-on: ubuntu-latest
     env:
       TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
-        module: ${{ fromJson(needs.module-changes.outputs.matrix) }}
-
+        module: ${{ fromJson(needs.format-and-detect.outputs.matrix) }}
+    
     permissions:
-      pull-requests: write
       contents: read
+      pull-requests: write
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -75,10 +98,6 @@ jobs:
 
       - name: Terraform Init
         run: terraform init
-        working-directory: ${{ matrix.module }}
-
-      - name: Terraform Format
-        run: terraform fmt -check -recursive
         working-directory: ${{ matrix.module }}
 
       - name: Terraform Validate
@@ -148,6 +167,4 @@ jobs:
                 repo: context.repo.repo,
                 body: `### ✅ Terraform Apply Successful!\nThe infrastructure has been updated.\n\n<details><summary>Show Apply Output</summary>\n\n\`\`\`terraform\n${process.env.APPLY_OUT}\n\`\`\`\n\n</details>`
               });
-            } else {
-              console.log("No associated PR found for this push.");
             }
