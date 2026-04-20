@@ -3,3 +3,5 @@ variable "ami_id" {
   default     = "test-id7"
   description = "The ID used to trigger a name change"
 }
+
+#check direct push test comment
