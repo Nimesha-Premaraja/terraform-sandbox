@@ -29,6 +29,9 @@ jobs:
           # Using a PAT is CRITICAL to trigger the next workflow run after auto-fix
           token: ${{ secrets.MY_GIT_PAT }}
 
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
       - name: Terraform Format (Global)
         run: terraform fmt -recursive tf-resouces/environments/terraform/
 
