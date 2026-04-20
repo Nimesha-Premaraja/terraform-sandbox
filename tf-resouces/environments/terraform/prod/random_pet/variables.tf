@@ -4,4 +4,4 @@ variable "ami_id" {
   description = "The ID used to trigger a name change"
 }
 
-#check direct push test comment
+#check direct push test comment again
