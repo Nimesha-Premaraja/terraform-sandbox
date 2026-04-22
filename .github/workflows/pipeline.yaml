@@ -69,7 +69,6 @@ jobs:
         with:
           commit_message: "style: automated terraform fmt"
           file_pattern: "environments/**/*.tf"
-          token: ${{ steps.app_token.outputs.token }}
 
       - name: Notify Format Fix Committed
         if: steps.auto_commit.outputs.changes_detected == 'true'
