@@ -19,7 +19,8 @@ jobs:
       pull-requests: write
 
     outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      matrix: ${{ steps.changed-files.outputs.all_changed_files }}
+      has_changes: ${{ steps.changed-files.outputs.any_changed }}
       fmt_changed: ${{ steps.auto_commit.outputs.changes_detected }}
 
     steps:
@@ -40,44 +41,20 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       - name: Detect Changed Modules
-        id: set-matrix
-        run: |
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            git fetch origin ${{ github.base_ref }}
-            CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} ${{ github.sha }} -- 'environments/**')
-          else
-            BEFORE_SHA=${{ github.event.before }}
-            if [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
-              CHANGED_FILES=$(git show --name-only --format="" ${{ github.sha }} -- 'environments/**')
-            else
-              CHANGED_FILES=$(git diff --name-only $BEFORE_SHA ${{ github.sha }} -- 'environments/**')
-            fi
-          fi
-
-          # Extract unique module directories (dirs that contain a main.tf)
-          MODULES=""
-          if [ -n "$CHANGED_FILES" ]; then
-            while IFS= read -r file; do
-              dir=$(dirname "$file")
-              if [ -f "$dir/main.tf" ]; then
-                MODULES="$MODULES\n$dir"
-              fi
-            done <<< "$CHANGED_FILES"
-          fi
-
-          MODULES=$(printf "$MODULES" | sort -u | grep -v '^$')
-
-          if [ -z "$MODULES" ]; then
-            echo "matrix=[]" >> $GITHUB_OUTPUT
-          else
-            JSON_MODULES=$(echo "$MODULES" | jq -R -s -c 'split("\n") | map(select(length > 0))')
-            echo "matrix=$JSON_MODULES" >> $GITHUB_OUTPUT
-          fi
+        id: changed-files
+        uses: tj-actions/changed-files@v47
+        with:
+          files: "environments/**/*.tf"
+          dir_names: "true"
+          dir_names_max_depth: "3"
+          dir_names_exclude_current_dir: "true"
+          json: "true"
+          escape_json: "false"
 
       - name: Terraform Format (Targeted)
-        if: steps.set-matrix.outputs.matrix != '[]'
+        if: steps.changed-files.outputs.any_changed == 'true'
         run: |
-          echo '${{ steps.set-matrix.outputs.matrix }}' | jq -r '.[]' | while IFS= read -r dir; do
+          echo '${{ steps.changed-files.outputs.all_changed_files }}' | jq -r '.[]' | while IFS= read -r dir; do
             if [ -d "$dir" ]; then
               echo "Running terraform fmt on: $dir"
               terraform fmt "$dir"
@@ -86,7 +63,7 @@ jobs:
 
       - name: Auto-Commit Format Fixes
         id: auto_commit
-        if: steps.set-matrix.outputs.matrix != '[]'
+        if: steps.changed-files.outputs.any_changed == 'true'
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "style: automated terraform fmt"
@@ -102,7 +79,7 @@ jobs:
   terraform:
     name: "Terraform (${{ matrix.module }})"
     needs: format-and-detect
-    if: needs.format-and-detect.outputs.matrix != '[]' && needs.format-and-detect.outputs.matrix != '' && needs.format-and-detect.outputs.fmt_changed != 'true'
+    if: needs.format-and-detect.outputs.has_changes == 'true' && needs.format-and-detect.outputs.fmt_changed != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
